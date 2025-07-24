@@ -9,7 +9,7 @@ import groovy.transform.Field
 @Field static def shouldReconnect = false
 
 metadata {
-    definition(name: "Http ratGdo", namespace: "MJS Gadgets", author: "MitchJS", importUrl: "") {
+    definition(name: "Homekit-RATGDO (http)", namespace: "MJS Gadgets", author: "MitchJS", importUrl: "https://raw.githubusercontent.com/mitchjs/Hubitat/refs/heads/main/Drivers/MJS-Gadgets-Http-RatGDO.groovy") {
         capability "Garage Door Control"
 		capability "Light"
         capability "Lock"  
@@ -26,6 +26,7 @@ metadata {
         attribute "availability", "enum", ["offline","online"]
         attribute "obstruction", "enum", ["obstructed","clear"]
         
+        attribute "upTime", "string", ["0:00:00:00"]
         attribute "lastDoorActivity", "string"
         attribute "eventStreamStatus", "string"
     }
@@ -38,9 +39,6 @@ preferences {
 
 
 def testCode() {
-    def date = new Date()
-	def finalString = date?.format('MM/d/yyyy hh:mm a',location.timeZone)
-	sendEvent(name: "lastDoorActivity", value: finalString, display: false , displayed: false)
 }
 
 def initialize() {
@@ -58,7 +56,7 @@ def initialize() {
         shouldReconnect = false
     }
       
-    sendEvent(name: "eventStreamStatus", value: "Connecting", display: true, descriptionText:"${device.displayName} eventStreamStatus is Connecting")
+    sendEvent(name: "eventStreamStatus", value: "Connecting", descriptionText:"${device.displayName} eventStreamStatus is Connecting")
 
     infolog("initialize() called, request subscribe to SSE")
         
@@ -70,7 +68,6 @@ def initialize() {
         query: [id : "${device.id}", "heartbeat" : "30"],
         body: "",
         timeout: 5
-        //headers: headers
     ]
     
     try {
@@ -107,7 +104,7 @@ def updated() {
     
     if (device.currentValue("eventStreamStatus") == "Connected" ||
         device.currentValue("eventStreamStatus") == "Connecting") {
-        	sendEvent(name: "eventStreamStatus", value: "Disconnecting", display: true, descriptionText:"${device.displayName} eventStreamStatus is Disconnecting")
+        	sendEvent(name: "eventStreamStatus", value: "Disconnecting", descriptionText:"${device.displayName} eventStreamStatus is Disconnecting")
     		interfaces.eventStream.close()
     }
     else {
@@ -156,11 +153,11 @@ def eventStreamStatus(String message) {
     debuglog("eventStreamStatus() ${message}")
     
     if (message.startsWith("START:")) {
-        sendEvent(name: "eventStreamStatus", value: "Connected", display: true, descriptionText:"${device.displayName} eventStreamStatus is Connected")
+        sendEvent(name: "eventStreamStatus", value: "Connected", descriptionText:"${device.displayName} eventStreamStatus is Connected")
         shouldReconnect = true;
     }
     else if (message.startsWith("STOP:")) {
-        sendEvent(name: "eventStreamStatus", value: "Disconnected", display: true, descriptionText:"${device.displayName} eventStreamStatus is Disconnected")
+        sendEvent(name: "eventStreamStatus", value: "Disconnected", descriptionText:"${device.displayName} eventStreamStatus is Disconnected")
         
         // try to reconnect
         if (shouldReconnect == true) {
@@ -169,6 +166,14 @@ def eventStreamStatus(String message) {
         }
     }
     else if (message.startsWith("ERROR:")) {
+    	sendEvent(name: "eventStreamStatus", value: "Disconnected", descriptionText:"${device.displayName} eventStreamStatus is Disconnected")
+        if (message.contains("SocketTimeoutException")) {
+            // try to reconnect
+            //if (shouldReconnect == true) {
+                debuglog("eventStreamStatus() will re-init")
+                runIn(5, "initialize")
+            //}
+        }
     }
 }
 
@@ -186,31 +191,37 @@ def parsejsonResponse(Map jsonResponse) {
         
     jsonResponse.each { key, value ->
         switch (key) {
+            case "upTime":
+            	def upTime = getHumanTimeFormatFromMilliseconds(value.toString())
+            	sendEvent(name: "upTime", value: "$upTime (days:hrs:min:sec)")
+            	break;
+            
+            case "lastDoorUpdateAt":
+            	debuglog("parsejsonResponse() json: $key:$value")
+            	def date = new Date(now() - value)
+                def finalString = date?.format('MM/d/yyyy hh:mm a',location.timeZone)
+            	sendEvent(name: "lastDoorActivity", value: finalString)
+            	break;
+            
             case "garageDoorState":
                 debuglog("parsejsonResponse() json: $key:$value")
-            
-            	if (device.currentValue("door") != value.toLowerCase()) {
-                    def date = new Date()
-                    def finalString = date?.format('MM/d/yyyy hh:mm a',location.timeZone)
-					sendEvent(name: "lastDoorActivity", value: finalString, display: false , displayed: false)
-                }
-            
-                sendEvent(name: "door", value: value.toLowerCase(), display: true, isStateChange: true, descriptionText:"${device.displayName} Door Status is $value")
+            	// must be lower case
+                sendEvent(name: "door", value: value.toLowerCase(), isStateChange: true, descriptionText:"${device.displayName} Door Status is $value")
                 break;
             
             case "garageLightOn":
                 debuglog("parsejsonResponse() json: $key:$value")
-                sendEvent(name:"light", value: (value ? "on" : "off"), display: true, descriptionText: "${device.displayName} Light Status is $value")
+                sendEvent(name:"light", value: (value ? "on" : "off"), descriptionText: "${device.displayName} Light Status is $value")
                 break;
             
             case "garageLockState":
                 debuglog("parsejsonResponse() json: $key:$value")
-                sendEvent(name:"lock", value: value, display: true, descriptionText: "${device.displayName} Lock Status is $value")
+                sendEvent(name:"lock", value: value, descriptionText: "${device.displayName} Lock Status is $value")
                 break;
                 
             case "garageObstructed":
                 debuglog("parsejsonResponse() json: $key:$value")
-                sendEvent(name:"obstruction", value: value, display: true, descriptionText: "${device.displayName} Obstruction Sensor Status is $value")
+                sendEvent(name:"obstruction", value: value, descriptionText: "${device.displayName} Obstruction Sensor Status is $value")
                 break;
         }
     }
@@ -282,6 +293,21 @@ def sendCommand(String key, String value) {
     //}
 }
 
+
+//
+def String getHumanTimeFormatFromMilliseconds(String millisecondS){
+    String message = "";
+    long milliseconds = Long.valueOf(millisecondS);
+
+    int seconds = (int) ((milliseconds / 1000)) % 60;
+    int minutes = (int) ((milliseconds / (1000 * 60))) % 60;
+    int hours = (int) ((milliseconds / (1000 * 60 * 60))) % 24;
+    int days = (int) (milliseconds / (1000 * 60 * 60 * 24));
+
+    message = String.format("%d:%02d:%02d:%02d", days, hours, minutes, seconds);
+
+    return message;
+}
 
 def logsOff() {
     log.warn "debug logging disabled"
