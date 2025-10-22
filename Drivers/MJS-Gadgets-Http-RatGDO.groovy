@@ -12,6 +12,7 @@ metadata {
     definition(name: "Homekit-RATGDO (http)", namespace: "MJS Gadgets", author: "MitchJS", importUrl: "https://raw.githubusercontent.com/mitchjs/Hubitat/refs/heads/main/Drivers/MJS-Gadgets-Http-RatGDO.groovy") {
         capability "Garage Door Control"
 		capability "Light"
+        capability "Switch"  
         capability "Lock"  
         capability "Refresh"
                 
@@ -22,13 +23,17 @@ metadata {
         
         //attribute "door", "enum", ["unknown", "open", "closing", "closed", "opening"]
         attribute "light", "enum", ["on","off"]
+        attribute "switch", "enum", ["on","off"]
         attribute "lock", "enum", ["locked","unlocked"]
+        attribute "remotes", "enum", ["disabled","enabled"]
         attribute "availability", "enum", ["offline","online"]
         attribute "obstruction", "enum", ["obstructed","clear"]
         
         attribute "upTime", "string", ["0:00:00:00"]
         attribute "lastDoorActivity", "string"
         attribute "eventStreamStatus", "string"
+        
+        attribute "networkStatus", "enum", ["offline","online"]
     }
 }
 
@@ -43,7 +48,7 @@ def testCode() {
 
 def initialize() {
     infolog("initialize() called")
-    
+        
     // make sure we got an IP
     if (!settings.ipAddr) {
         infolog("No IP Address in prefs")
@@ -52,10 +57,11 @@ def initialize() {
     
     // temporally prevent reconnection
     if (device.currentValue("eventStreamStatus") == "Connected") {
-        
         shouldReconnect = false
     }
-      
+    
+    sendEvent(name:"networkStatus", value: "offline")
+    
     sendEvent(name: "eventStreamStatus", value: "Connecting", descriptionText:"${device.displayName} eventStreamStatus is Connecting")
 
     infolog("initialize() called, request subscribe to SSE")
@@ -92,6 +98,8 @@ def initialize() {
     }
     catch (Exception e) {
         log.error "initialize() Execption: ${e}"
+
+        runIn(10, initialize)
     }
     
     // if logs are in "Debug" turn down to "Info" after an hour
@@ -153,10 +161,12 @@ def eventStreamStatus(String message) {
     debuglog("eventStreamStatus() ${message}")
     
     if (message.startsWith("START:")) {
+        sendEvent(name:"networkStatus", value: "online")
         sendEvent(name: "eventStreamStatus", value: "Connected", descriptionText:"${device.displayName} eventStreamStatus is Connected")
         shouldReconnect = true;
     }
     else if (message.startsWith("STOP:")) {
+        sendEvent(name:"networkStatus", value: "offline")
         sendEvent(name: "eventStreamStatus", value: "Disconnected", descriptionText:"${device.displayName} eventStreamStatus is Disconnected")
         
         // try to reconnect
@@ -166,6 +176,7 @@ def eventStreamStatus(String message) {
         }
     }
     else if (message.startsWith("ERROR:")) {
+        sendEvent(name:"networkStatus", value: "offline")
     	sendEvent(name: "eventStreamStatus", value: "Disconnected", descriptionText:"${device.displayName} eventStreamStatus is Disconnected")
         if (message.contains("SocketTimeoutException")) {
             // try to reconnect
@@ -188,6 +199,8 @@ void parse(String response) {
 def parsejsonResponse(Map jsonResponse) {
     
     //log.debug "parsejsonResponse() json: ${jsonResponse}"
+    
+    sendEvent(name:"networkStatus", value: "online")
         
     jsonResponse.each { key, value ->
         switch (key) {
@@ -197,6 +210,7 @@ def parsejsonResponse(Map jsonResponse) {
             	break;
             
             case "lastDoorUpdateAt":
+            case "doorUpdateAt":
             	debuglog("parsejsonResponse() json: $key:$value")
             	def date = new Date(now() - value)
                 def finalString = date?.format('MM/d/yyyy hh:mm a',location.timeZone)
@@ -217,6 +231,7 @@ def parsejsonResponse(Map jsonResponse) {
             case "garageLockState":
                 debuglog("parsejsonResponse() json: $key:$value")
                 sendEvent(name:"lock", value: value, descriptionText: "${device.displayName} Lock Status is $value")
+            	sendEvent(name:"remotes", value: value, descriptionText: "${device.displayName} Remote Status is $value")
                 break;
                 
             case "garageObstructed":
