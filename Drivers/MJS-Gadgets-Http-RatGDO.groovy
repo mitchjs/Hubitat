@@ -6,29 +6,31 @@
 
 import groovy.transform.Field
 
-@Field static def shouldReconnect = false
+@Field static boolean shouldReconnect = false
+@Field static boolean refreshNeeded = false
 
 metadata {
     definition(name: "Homekit-RATGDO (http)", namespace: "MJS Gadgets", author: "MitchJS", importUrl: "https://raw.githubusercontent.com/mitchjs/Hubitat/refs/heads/main/Drivers/MJS-Gadgets-Http-RatGDO.groovy") {
         capability "Garage Door Control"
-		capability "Light"
-        capability "Lock"  
         capability "Refresh"
-                
         capability "Initialize"
-        //capability "Configuration"
+        
+        command "LightOn"
+        command "LightOff"
+        command "RemotesEnabled"
+        command "RemotesDisabled"
         
         //command "testCode"
         
         //attribute "door", "enum", ["unknown", "open", "closing", "closed", "opening"]
         attribute "light", "enum", ["on","off"]
-        attribute "lock", "enum", ["locked","unlocked"]
+        attribute "remotes", "enum", ["disabled","enabled"]
         attribute "availability", "enum", ["offline","online"]
         attribute "obstruction", "enum", ["obstructed","clear"]
-        
         attribute "upTime", "string", ["0:00:00:00"]
         attribute "lastDoorActivity", "string"
         attribute "eventStreamStatus", "string"
+        attribute "networkStatus", "enum", ["offline","online"]
     }
 }
 
@@ -37,13 +39,19 @@ preferences {
     input name: "logLevel",title: "Logging Level", multiple: false, required: true, type: "enum", options: getLogLevels(), submitOnChange : false, defaultValue : "1"
 }
 
-
 def testCode() {
 }
 
 def initialize() {
-    infolog("initialize() called")
-    
+    debuglog("initialize() called")
+ 
+    // create component child light
+    def currentchild = getChildDevices()?.find { it.deviceNetworkId == "${device.deviceNetworkId}-light"}
+    if (currentchild == null)
+    {
+    	addChildDevice("hubitat", "Generic Component Switch", "${device.deviceNetworkId}-light", [name: "${device.displayName}-light", isComponent: true])
+    }
+        
     // make sure we got an IP
     if (!settings.ipAddr) {
         infolog("No IP Address in prefs")
@@ -52,10 +60,11 @@ def initialize() {
     
     // temporally prevent reconnection
     if (device.currentValue("eventStreamStatus") == "Connected") {
-        
         shouldReconnect = false
     }
-      
+    
+    sendEvent(name:"networkStatus", value: "offline")
+    
     sendEvent(name: "eventStreamStatus", value: "Connecting", descriptionText:"${device.displayName} eventStreamStatus is Connecting")
 
     infolog("initialize() called, request subscribe to SSE")
@@ -83,7 +92,7 @@ def initialize() {
                     pingInterval: 10,
                     readTimeout: 60,
                     headers:["Accept": "text/event-stream"],
-                    rawData: false
+                    rawData: true
                 ]) 
                 
                 refresh()
@@ -92,6 +101,8 @@ def initialize() {
     }
     catch (Exception e) {
         log.error "initialize() Execption: ${e}"
+
+        runIn(10, initialize)
     }
     
     // if logs are in "Debug" turn down to "Info" after an hour
@@ -100,7 +111,7 @@ def initialize() {
 }
 
 def updated() {
-    infolog "updated..."
+    debuglog "updated..."
     
     if (device.currentValue("eventStreamStatus") == "Connected" ||
         device.currentValue("eventStreamStatus") == "Connecting") {
@@ -117,6 +128,8 @@ def updated() {
 }
 
 def refresh(){
+    debuglog("refresh() called")
+
     if (device.currentValue("eventStreamStatus") == "Connected" ||
         device.currentValue("eventStreamStatus") == "Connecting") {
         // set up for get status
@@ -129,6 +142,7 @@ def refresh(){
         ]
 
         try {
+            infolog("get status.json")
             // get initial status
             asynchttpGet("httpGetCallback", params)
         }
@@ -153,10 +167,12 @@ def eventStreamStatus(String message) {
     debuglog("eventStreamStatus() ${message}")
     
     if (message.startsWith("START:")) {
+        sendEvent(name:"networkStatus", value: "online")
         sendEvent(name: "eventStreamStatus", value: "Connected", descriptionText:"${device.displayName} eventStreamStatus is Connected")
         shouldReconnect = true;
     }
     else if (message.startsWith("STOP:")) {
+        sendEvent(name:"networkStatus", value: "offline")
         sendEvent(name: "eventStreamStatus", value: "Disconnected", descriptionText:"${device.displayName} eventStreamStatus is Disconnected")
         
         // try to reconnect
@@ -166,6 +182,7 @@ def eventStreamStatus(String message) {
         }
     }
     else if (message.startsWith("ERROR:")) {
+        sendEvent(name:"networkStatus", value: "offline")
     	sendEvent(name: "eventStreamStatus", value: "Disconnected", descriptionText:"${device.displayName} eventStreamStatus is Disconnected")
         if (message.contains("SocketTimeoutException")) {
             // try to reconnect
@@ -179,29 +196,62 @@ def eventStreamStatus(String message) {
 
 // data from eventStream
 void parse(String response) {
-    debuglog("parse() ${response}")
-    Map result = parseJson(response)
-    parsejsonResponse(result)
+    if (response.length() == 0) return;
+    debuglog("parse(): ${response}")
+
+    // get field type (event, data, id, retry)
+    field = response.split(":", 2)[0]
+    //
+    switch (field) {
+   		case "data":
+        	Map result = parseJson(response.split(":", 2)[1])
+        	parsejsonResponse(result)
+    }
+    // retry:
+    // id:
+    // event: message
+    // data: { "upTime": 27355256, "freeHeap": 114096, "minHeap": 45084, "wifiRSSI": "-39 dBm, Channel 6" }
+    // data: { "garageLightOn": false, "upTime": 28974782 }
 }
 
 // parse json map
 def parsejsonResponse(Map jsonResponse) {
-    
     //log.debug "parsejsonResponse() json: ${jsonResponse}"
+    
+    sendEvent(name:"networkStatus", value: "online")
         
     jsonResponse.each { key, value ->
         switch (key) {
             case "upTime":
+            	debuglog("parsejsonResponse() json: $key:$value")
             	def upTime = getHumanTimeFormatFromMilliseconds(value.toString())
             	sendEvent(name: "upTime", value: "$upTime (days:hrs:min:sec)")
             	break;
             
             case "lastDoorUpdateAt":
+            case "doorUpdateAt":
             	debuglog("parsejsonResponse() json: $key:$value")
             	def date = new Date(now() - value)
                 def finalString = date?.format('MM/d/yyyy hh:mm a',location.timeZone)
             	sendEvent(name: "lastDoorActivity", value: finalString)
             	break;
+            
+            case "ttcActive":
+                debuglog("parsejsonResponse() json: $key:$value")
+            	if (value.toInteger() > 0) {
+                    refreshNeeded = true
+                	sendEvent(name: "door", value: "closing", isStateChange: true, descriptionText:"${device.displayName} Door Status is $value")
+                }
+            	else {
+                    if (refreshNeeded == true) {
+                        refreshNeeded = false
+                        
+                        log.debug("i got here")
+                        
+                        runIn(5, "refresh")
+                    }
+                }
+                break;
             
             case "garageDoorState":
                 debuglog("parsejsonResponse() json: $key:$value")
@@ -212,11 +262,12 @@ def parsejsonResponse(Map jsonResponse) {
             case "garageLightOn":
                 debuglog("parsejsonResponse() json: $key:$value")
                 sendEvent(name:"light", value: (value ? "on" : "off"), descriptionText: "${device.displayName} Light Status is $value")
+            	updateComponentLight(value)
                 break;
             
             case "garageLockState":
                 debuglog("parsejsonResponse() json: $key:$value")
-                sendEvent(name:"lock", value: value, descriptionText: "${device.displayName} Lock Status is $value")
+            	sendEvent(name:"remotes", value: value.toLowerCase(), descriptionText: "${device.displayName} Remote Status is $value")
                 break;
                 
             case "garageObstructed":
@@ -229,43 +280,61 @@ def parsejsonResponse(Map jsonResponse) {
 }
 
 def open() {
-    infolog("DOOR OPEN requested")
+    debuglog("DOOR OPEN requested")
     
     sendCommand("garageDoorState", "1")
 }
 
 void close() {
-    infolog("DOOR CLOSE requested")
+    debuglog("DOOR CLOSE requested")
 
     sendCommand("garageDoorState", "0")
 }
 
-def on() {
+def LightOn() {
     infolog("LIGHT ON requested")
 
     sendCommand("garageLightOn", "1")
 }
 
-def off() {
-    infolog("LIGHT OFF requested")
+def LightOff() {
+    debuglog("LIGHT OFF requested")
 
     sendCommand("garageLightOn", "0")
 }
 
-def lock() {
-    infolog("LOCK SECURED requested")
-    sendCommand("garageLockState", "1")
-}
-
-def unlock() {
-    infolog("LOCK UNSECURED requested")
+def RemotesEnabled() {
+    debuglog("REMOTES ENABLED requested")
     
     sendCommand("garageLockState", "0")
 }
 
-def sendCommand(String key, String value) {
-    infolog("sendCommand($key, $value)")
+// child component API
+def componentRefresh(cd) {
+}
+
+def componentOff(cd) { 
+	LightOff()
+}
+def componentOn(cd) { 
+	LightOn()
+}
+
+def updateComponentLight(boolean value)
+{
+    childNetworkId = "${device.deviceNetworkId}-light"
     
+	getChildDevice(childNetworkId)?.parse([[name:"switch", value: (value ? "on" : "off"), descriptionText:"GDO light was turned " + (value ? "on" : "off")]])
+}
+
+def RemotesDisabled() {
+    debuglog("REMOTES DISABLED requested")
+    
+    sendCommand("garageLockState", "1")
+}
+
+def sendCommand(String key, String value) {
+    debuglog("sendCommand($key, $value)")
     
     // check if event stream is connected... if disconnect do init
     if (device.currentValue("eventStreamStatus") == "Disconnected") {
@@ -275,7 +344,7 @@ def sendCommand(String key, String value) {
         //runin(4, sendCommand, [data: [key, value]])
     }
     
-    debuglog("sendCommand() ${device.currentValue("eventStreamStatus")}")
+    debuglog("sendCommand() eventStreamStatus: ${device.currentValue("eventStreamStatus")}")
     
     //if (device.currentValue("eventStreamStatus") == "Connected") {
         try {
@@ -295,7 +364,7 @@ def sendCommand(String key, String value) {
 
 
 //
-def String getHumanTimeFormatFromMilliseconds(String millisecondS){
+def String getHumanTimeFormatFromMilliseconds(String millisecondS) {
     String message = "";
     long milliseconds = Long.valueOf(millisecondS);
 
