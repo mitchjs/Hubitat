@@ -2,7 +2,10 @@
  * RatGDO (Homekit FW), using HTTP access only
  * By: Mitch Solomon@rush2112.net
  * REQUIRES HOMEKIT FW: https://github.com/ratgdo/homekit-ratgdo
+ *
+ *   v1.0.0 - Initial Release
  */
+
 
 import groovy.transform.Field
 
@@ -43,7 +46,7 @@ def testCode() {
 }
 
 def initialize() {
-    debuglog("initialize() called")
+    infolog("initialize() called")
  
     // create component child light
     def currentchild = getChildDevices()?.find { it.deviceNetworkId == "${device.deviceNetworkId}-light"}
@@ -92,7 +95,7 @@ def initialize() {
                     pingInterval: 10,
                     readTimeout: 60,
                     headers:["Accept": "text/event-stream"],
-                    rawData: true
+                    rawData: false
                 ]) 
                 
                 refresh()
@@ -111,12 +114,13 @@ def initialize() {
 }
 
 def updated() {
-    debuglog "updated..."
+    infolog("updated() called")
     
-    if (device.currentValue("eventStreamStatus") == "Connected" ||
-        device.currentValue("eventStreamStatus") == "Connecting") {
+    if (device.currentValue("eventStreamStatus") == "Connected") /* ||
+        device.currentValue("eventStreamStatus") == "Connecting") */ {
         	sendEvent(name: "eventStreamStatus", value: "Disconnecting", descriptionText:"${device.displayName} eventStreamStatus is Disconnecting")
     		interfaces.eventStream.close()
+        	infolog("interfaces.eventStream.close() called")
     }
     else {
         initialize()
@@ -164,7 +168,7 @@ def httpPostCallback(response, data) {
 }
 
 def eventStreamStatus(String message) {
-    debuglog("eventStreamStatus() ${message}")
+    infolog("eventStreamStatus() ${message}")
     
     if (message.startsWith("START:")) {
         sendEvent(name:"networkStatus", value: "online")
@@ -177,8 +181,8 @@ def eventStreamStatus(String message) {
         
         // try to reconnect
         if (shouldReconnect == true) {
-            debuglog("eventStreamStatus() will re-init")
-            runIn(5, "initialize")
+            infolog("eventStreamStatus() stream stopped, reconnect = true, will re-init driver")
+            runIn(10, "initialize")
         }
     }
     else if (message.startsWith("ERROR:")) {
@@ -186,10 +190,8 @@ def eventStreamStatus(String message) {
     	sendEvent(name: "eventStreamStatus", value: "Disconnected", descriptionText:"${device.displayName} eventStreamStatus is Disconnected")
         if (message.contains("SocketTimeoutException")) {
             // try to reconnect
-            //if (shouldReconnect == true) {
-                debuglog("eventStreamStatus() will re-init")
-                runIn(5, "initialize")
-            //}
+            infolog("eventStreamStatus() Error - will re-init driver")
+            runIn(10, "initialize")
         }
     }
 }
@@ -199,14 +201,24 @@ void parse(String response) {
     if (response.length() == 0) return;
     debuglog("parse(): ${response}")
 
-    // get field type (event, data, id, retry)
-    field = response.split(":", 2)[0]
-    //
-    switch (field) {
-   		case "data":
-        	Map result = parseJson(response.split(":", 2)[1])
-        	parsejsonResponse(result)
+    if (response.startsWith("{")) {
+        Map result = parseJson(response)
+    	parsejsonResponse(result)
     }
+	/*
+    else {
+        debuglog("parse(): raw!")
+        // get field type (event, data, id, retry)
+        field = response.split(":", 2)[0]
+        //
+        switch (field) {
+            case "data":
+                Map result = parseJson(response.split(":", 2)[1])
+                parsejsonResponse(result)
+        }
+    }
+	*/
+    
     // retry:
     // id:
     // event: message
@@ -216,8 +228,8 @@ void parse(String response) {
 
 // parse json map
 def parsejsonResponse(Map jsonResponse) {
-    //log.debug "parsejsonResponse() json: ${jsonResponse}"
-    
+    //debuglog("parsejsonResponse() json: ${jsonResponse}")
+
     sendEvent(name:"networkStatus", value: "online")
         
     jsonResponse.each { key, value ->
