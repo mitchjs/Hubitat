@@ -1,6 +1,6 @@
 /*
  * RatGDO (Homekit FW), using HTTP access only
- * By: Mitch Solomon@rush2112.net
+ * By: Mitch Solomon | mitchjs@rush2112.net
  * REQUIRES HOMEKIT FW: https://github.com/ratgdo/homekit-ratgdo
  *
  *   v1.0.0 - Initial Release
