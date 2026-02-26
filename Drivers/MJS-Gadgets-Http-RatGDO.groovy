@@ -4,6 +4,7 @@
  * REQUIRES HOMEKIT FW: https://github.com/ratgdo/homekit-ratgdo
  *
  *   v1.0.0 - Initial Release
+ *   v1.0.1 - added Open Partial (requires newer fw in ratgdo)
  */
 
 
