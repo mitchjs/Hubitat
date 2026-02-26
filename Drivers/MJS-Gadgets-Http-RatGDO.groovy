@@ -18,6 +18,7 @@ metadata {
         capability "Refresh"
         capability "Initialize"
         
+        command "OpenPartial"
         command "LightOn"
         command "LightOff"
         command "RemotesEnabled"
@@ -34,12 +35,15 @@ metadata {
         attribute "lastDoorActivity", "string"
         attribute "eventStreamStatus", "string"
         attribute "networkStatus", "enum", ["offline","online"]
+        attribute "durationClose", "string", ["00"]
+        attribute "durationOpen", "string", ["00"]
     }
 }
 
 preferences {
-	input name: "ipAddr", type: "text", title: "IP Address of RatGDO (homekit fw)", required: true          
-    input name: "logLevel",title: "Logging Level", multiple: false, required: true, type: "enum", options: getLogLevels(), submitOnChange : false, defaultValue : "1"
+    input name: "ipAddr", title: "IP Address of RatGDO (homekit fw)", type: "text", required: true   
+    input name: "partialTime", title: "Percentage of total opening time", required: true, type: "enum", options: ["10%","20%","30%","40%","50%","60%"], submitOnChange : false, defaultValue : "10%"
+    input name: "logLevel", title: "Logging Level", multiple: false, required: true, type: "enum", options: getLogLevels(), submitOnChange : false, defaultValue : "1"
 }
 
 def testCode() {
@@ -248,6 +252,15 @@ def parsejsonResponse(Map jsonResponse) {
             	sendEvent(name: "lastDoorActivity", value: finalString)
             	break;
             
+            case "openDuration":
+            	debuglog("parsejsonResponse() json: $key:$value")
+            	sendEvent(name: "durationOpen", value: value, descriptionText:"${device.displayName} time it take to open door is $value seconds")
+            	break;
+           	case "closeDuration":
+            	debuglog("parsejsonResponse() json: $key:$value")
+            	sendEvent(name: "durationClose", value: value, descriptionText:"${device.displayName} time it take to close door is $value seconds")
+            	break;
+            
             case "ttcActive":
                 debuglog("parsejsonResponse() json: $key:$value")
             	if (value.toInteger() > 0) {
@@ -257,9 +270,6 @@ def parsejsonResponse(Map jsonResponse) {
             	else {
                     if (refreshNeeded == true) {
                         refreshNeeded = false
-                        
-                        log.debug("i got here")
-                        
                         runIn(5, "refresh")
                     }
                 }
@@ -301,6 +311,12 @@ void close() {
     debuglog("DOOR CLOSE requested")
 
     sendCommand("garageDoorState", "0")
+}
+
+def OpenPartial() {
+    debuglog("DOOR PARTIAL OPEN requested, time: ${settings.partialTime}")
+
+    sendCommand("garageDoorState", "p${settings.partialTime}")
 }
 
 def LightOn() {
