@@ -125,7 +125,7 @@ def initialize() {
 def updated() {
     infolog("updated() called")
 
-    if (curIpAddr != settings.ipAddr) {
+    if (!settings.ipAddr && curIpAddr != settings.ipAddr) {
         infolog("ipAddress Changed")
         // sync to current
         curIpAddr = settings.ipAddr
