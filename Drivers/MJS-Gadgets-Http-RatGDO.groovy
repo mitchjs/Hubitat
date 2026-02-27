@@ -12,6 +12,7 @@ import groovy.transform.Field
 
 @Field static boolean shouldReconnect = false
 @Field static boolean refreshNeeded = false
+@Field static String  curIpAddr = ""
 
 metadata {
     definition(name: "Homekit-RATGDO (http)", namespace: "MJS Gadgets", author: "MitchJS", importUrl: "https://raw.githubusercontent.com/mitchjs/Hubitat/refs/heads/main/Drivers/MJS-Gadgets-Http-RatGDO.groovy") {
@@ -65,6 +66,9 @@ def initialize() {
         infolog("No IP Address in prefs")
         return
     }
+    
+    curIpAddr = settings.ipAddr
+    infolog("initialize() ip address=${curIpAddr}")
     
     // temporally prevent reconnection
     if (device.currentValue("eventStreamStatus") == "Connected") {
@@ -120,15 +124,23 @@ def initialize() {
 
 def updated() {
     infolog("updated() called")
-    
-    if (device.currentValue("eventStreamStatus") == "Connected") /* ||
-        device.currentValue("eventStreamStatus") == "Connecting") */ {
-        	sendEvent(name: "eventStreamStatus", value: "Disconnecting", descriptionText:"${device.displayName} eventStreamStatus is Disconnecting")
-    		interfaces.eventStream.close()
-        	infolog("interfaces.eventStream.close() called")
+
+    if (curIpAddr != settings.ipAddr) {
+        infolog("ipAddress Changed")
+        // sync to current
+        curIpAddr = settings.ipAddr
+        // if currently connected, disconnect (will auto reconnect)
+        if (device.currentValue("eventStreamStatus") == "Connected") {
+                sendEvent(name: "eventStreamStatus", value: "Disconnecting", descriptionText:"${device.displayName} eventStreamStatus is Disconnecting")
+                interfaces.eventStream.close()
+                infolog("interfaces.eventStream.close() called")
+        }
+        else {
+            initialize()
+        }
     }
     else {
-        initialize()
+        infolog("ipAddress not changed, no need to initialize")
     }
     
     // if logs are in "Debug" turn down to "Info" after an hour
