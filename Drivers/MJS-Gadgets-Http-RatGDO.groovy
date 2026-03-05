@@ -5,6 +5,8 @@
  *
  *   v1.0.0 - Initial Release
  *   v1.0.1 - added Open Partial (requires newer fw in ratgdo)
+     v1.0.2 - added workaround for "stopped" to "open" for HE dashboards
+     v1.0.3 - added child device(button controller) for partial open
  */
 
 
@@ -54,11 +56,16 @@ def testCode() {
 def initialize() {
     infolog("initialize() called")
  
-    // create component child light
+    // create child component switch (for light)
     def currentchild = getChildDevices()?.find { it.deviceNetworkId == "${device.deviceNetworkId}-light"}
-    if (currentchild == null)
-    {
-    	addChildDevice("hubitat", "Generic Component Switch", "${device.deviceNetworkId}-light", [name: "${device.displayName}-light", isComponent: true])
+    if (currentchild == null) {
+        addChildDevice("hubitat", "Generic Component Switch", "${device.deviceNetworkId}-light", [name: "${device.displayName}-light", isComponent: true])
+    }
+    // create child component button controller (PR) (for partial open)
+    currentchild = getChildDevices()?.find { it.deviceNetworkId == "${device.deviceNetworkId}-PartialOpen"}
+    if (currentchild == null) {
+        def child = addChildDevice("hubitat", "Generic Component Button Controller (PR)", "${device.deviceNetworkId}-PartialOpen", [name: "${device.displayName}-PartialOpen", isComponent: true])
+        child.sendEvent(name: "numberOfButtons", value: 1)
     }
         
     // make sure we got an IP
@@ -204,7 +211,7 @@ def eventStreamStatus(String message) {
     }
     else if (message.startsWith("ERROR:")) {
         sendEvent(name:"networkStatus", value: "offline")
-    	sendEvent(name: "eventStreamStatus", value: "Disconnected", descriptionText:"${device.displayName} eventStreamStatus is Disconnected")
+        sendEvent(name: "eventStreamStatus", value: "Disconnected", descriptionText:"${device.displayName} eventStreamStatus is Disconnected")
         if (message.contains("SocketTimeoutException")) {
             // try to reconnect
             infolog("eventStreamStatus() Error - will re-init driver")
@@ -220,9 +227,9 @@ void parse(String response) {
 
     if (response.startsWith("{")) {
         Map result = parseJson(response)
-    	parsejsonResponse(result)
+        parsejsonResponse(result)
     }
-	/*
+    /*
     else {
         debuglog("parse(): raw!")
         // get field type (event, data, id, retry)
@@ -234,7 +241,7 @@ void parse(String response) {
                 parsejsonResponse(result)
         }
     }
-	*/
+    */
     
     // retry:
     // id:
@@ -252,35 +259,35 @@ def parsejsonResponse(Map jsonResponse) {
     jsonResponse.each { key, value ->
         switch (key) {
             case "upTime":
-            	debuglog("parsejsonResponse() json: $key:$value")
-            	def upTime = getHumanTimeFormatFromMilliseconds(value.toString())
-            	sendEvent(name: "upTime", value: "$upTime (days:hrs:min:sec)")
-            	break;
+                debuglog("parsejsonResponse() json: $key:$value")
+                def upTime = getHumanTimeFormatFromMilliseconds(value.toString())
+                sendEvent(name: "upTime", value: "$upTime (days:hrs:min:sec)")
+                break;
             
             case "lastDoorUpdateAt":
             case "doorUpdateAt":
-            	debuglog("parsejsonResponse() json: $key:$value")
-            	def date = new Date(now() - value)
+                debuglog("parsejsonResponse() json: $key:$value")
+                def date = new Date(now() - value)
                 def finalString = date?.format('MM/d/yyyy hh:mm a',location.timeZone)
-            	sendEvent(name: "lastDoorActivity", value: finalString)
-            	break;
+                sendEvent(name: "lastDoorActivity", value: finalString)
+                break;
             
             case "openDuration":
-            	debuglog("parsejsonResponse() json: $key:$value")
-            	sendEvent(name: "durationOpen", value: value, descriptionText:"${device.displayName} time it take to open door is $value seconds")
-            	break;
-           	case "closeDuration":
-            	debuglog("parsejsonResponse() json: $key:$value")
-            	sendEvent(name: "durationClose", value: value, descriptionText:"${device.displayName} time it take to close door is $value seconds")
-            	break;
+                debuglog("parsejsonResponse() json: $key:$value")
+                sendEvent(name: "durationOpen", value: value, descriptionText:"${device.displayName} time it take to open door is $value seconds")
+                break;
+            case "closeDuration":
+                debuglog("parsejsonResponse() json: $key:$value")
+                sendEvent(name: "durationClose", value: value, descriptionText:"${device.displayName} time it take to close door is $value seconds")
+                break;
             
             case "ttcActive":
                 debuglog("parsejsonResponse() json: $key:$value")
-            	if (value.toInteger() > 0) {
+                if (value.toInteger() > 0) {
                     refreshNeeded = true
-                	sendEvent(name: "door", value: "closing", isStateChange: true, descriptionText:"${device.displayName} Door Status is $value")
+                    sendEvent(name: "door", value: "closing", isStateChange: true, descriptionText:"${device.displayName} Door Status is $value")
                 }
-            	else {
+                else {
                     if (refreshNeeded == true) {
                         refreshNeeded = false
                         runIn(5, "refresh")
@@ -290,19 +297,26 @@ def parsejsonResponse(Map jsonResponse) {
             
             case "garageDoorState":
                 debuglog("parsejsonResponse() json: $key:$value")
-            	// must be lower case
-                sendEvent(name: "door", value: value.toLowerCase(), isStateChange: true, descriptionText:"${device.displayName} Door Status is $value")
+                
+                // workaround for HE not supporting "stopped" (its really partial open)
+                def gdoState = value.toLowerCase()
+                if (gdoState == "stopped") {
+                    gdoState = "open"
+                }
+            
+                // must be lower case
+                sendEvent(name: "door", value: gdoState, isStateChange: true, descriptionText:"${device.displayName} Door Status is $value")
                 break;
             
             case "garageLightOn":
                 debuglog("parsejsonResponse() json: $key:$value")
                 sendEvent(name:"light", value: (value ? "on" : "off"), descriptionText: "${device.displayName} Light Status is $value")
-            	updateComponentLight(value)
+                updateComponentLight(value)
                 break;
             
             case "garageLockState":
                 debuglog("parsejsonResponse() json: $key:$value")
-            	sendEvent(name:"remotes", value: value.toLowerCase(), descriptionText: "${device.displayName} Remote Status is $value")
+                sendEvent(name:"remotes", value: value.toLowerCase(), descriptionText: "${device.displayName} Remote Status is $value")
                 break;
                 
             case "garageObstructed":
@@ -350,30 +364,39 @@ def RemotesEnabled() {
     sendCommand("garageLockState", "0")
 }
 
-// child component API
-def componentRefresh(cd) {
-}
-
-def componentOff(cd) { 
-	LightOff()
-}
-def componentOn(cd) { 
-	LightOn()
-}
-
-def updateComponentLight(boolean value)
-{
-    childNetworkId = "${device.deviceNetworkId}-light"
-    
-	getChildDevice(childNetworkId)?.parse([[name:"switch", value: (value ? "on" : "off"), descriptionText:"GDO light was turned " + (value ? "on" : "off")]])
-}
-
 def RemotesDisabled() {
     debuglog("REMOTES DISABLED requested")
     
     sendCommand("garageLockState", "1")
 }
 
+// child component API (Switch)
+def componentRefresh(cd) {
+}
+
+def componentOff(cd) { 
+    LightOff()
+}
+def componentOn(cd) { 
+    LightOn()
+}
+
+def updateComponentLight(boolean value)
+{
+    childNetworkId = "${device.deviceNetworkId}-light"
+    
+    getChildDevice(childNetworkId)?.parse([[name:"switch", value: (value ? "on" : "off"), descriptionText:"GDO light was turned " + (value ? "on" : "off")]])
+}
+
+// child component API (button controller (PR))
+def componentPush(cd, buttonNumber) {
+    infolog("componentPush(): cd=${cd}")
+    infolog("componentPush(): buttonNumber=${buttonNumber}")
+    
+    OpenPartial()
+}
+
+//
 def sendCommand(String key, String value) {
     debuglog("sendCommand($key, $value)")
     
